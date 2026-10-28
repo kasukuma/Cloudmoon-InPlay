@@ -164,15 +164,21 @@ async function getCloudflareIceServers(request, env) {
     if (!Array.isArray(result.iceServers) || result.iceServers.length === 0) {
       return Response.json({ error: "Invalid ICE server response" }, { status: 502, headers: { "Cache-Control": "no-store" } });
     }
-    const tlsTurnServers = result.iceServers.map((server) => {
+    const tlsTurnServer = result.iceServers.find((server) => {
       const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      return { ...server, urls: urls.filter((turnUrl) => typeof turnUrl === "string" && /^turns:/i.test(turnUrl)) };
-    }).filter((server) => server.urls.length > 0 && server.username && server.credential);
-    if (tlsTurnServers.length === 0) {
-      console.error("Cloudflare TURN response did not include authenticated turns: URLs");
-      return Response.json({ error: "No authenticated TURN over TLS servers were returned" }, { status: 502, headers: { "Cache-Control": "no-store" } });
+      return urls.some((turnUrl) => typeof turnUrl === "string" && /^turns:turn\.cloudflare\.com:(443|5349)(\?transport=tcp)?$/i.test(turnUrl)) && server.username && server.credential;
+    });
+    if (!tlsTurnServer) {
+      console.error("Cloudflare TURN response did not include authenticated TURN over TLS credentials");
+      return Response.json({ error: "No authenticated Cloudflare TURN over TLS server was returned" }, { status: 502, headers: { "Cache-Control": "no-store" } });
     }
-    return Response.json({ iceServers: tlsTurnServers }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({
+      iceServers: [{
+        urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+        username: tlsTurnServer.username,
+        credential: tlsTurnServer.credential
+      }]
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Cloudflare TURN credential request failed:", error);
     return Response.json({ error: "Unable to create ICE credentials" }, { status: 502, headers: { "Cache-Control": "no-store" } });
@@ -277,7 +283,7 @@ async function proxyCloudMoon(request) {
           const existing = Array.isArray(current.iceServers) ? current.iceServers : [];
           const onlyTlsTurnUrls = server => {
             const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-            return urls.filter(url => typeof url === 'string' && /^turns:/i.test(url));
+            return urls.filter(url => typeof url === 'string' && /^turns:turn\.cloudflare\.com:443\?transport=tcp$/i.test(url));
           };
           const tlsServers = [...cloudflareServers, ...existing].map(server => ({
             ...server,
